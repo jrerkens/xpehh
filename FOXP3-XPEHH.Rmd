@@ -1,0 +1,116 @@
+---
+title: "FOXP3-XPEHH"
+author: "Jimmy Erkens"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Packages
+
+```{r, packages, message=F}
+library(tidyverse)
+library(snpStats)
+library(VariantAnnotation)
+library(vcfR)
+library(adegenet)
+library(ggplot2)
+library(vegan)
+library(poppr)
+library(dplyr)
+library(pegas)
+```
+
+# Linkage Disequilibrium
+
+Converting VCF file to SNP matrix.
+
+```{r, snp_matrix}
+sabFOXP3vcf<-readVcf("sabFOXP3.vcf")
+sabFOXP3matrix<-genotypeToSnpMatrix(sabFOXP3vcf)
+```
+
+LD matrix and loci heatmap
+
+```{r, heatmap}
+sabFOXP3_LD <- ld(sabFOXP3matrix$genotypes,depth=180,stats="R.squared")
+head(sabFOXP3_LD, 10) 
+```
+
+```{r, visual_heatmap}
+cols=colorRampPalette(c("yellow","red"))(10)
+image(sabFOXP3_LD,lwd=0,cuts=9,col.regions=cols,colorkey=TRUE)
+```
+
+# Population structure
+
+Data conversion stuff:
+
+```{r, data conversion}
+# loading in vcf, old vcf was collapsed don't want her anymore
+FOXP3 <- read.vcfR("sabFOXP3.vcf", verbose = T)
+FOXP3_genind <- FOXP3 %>% vcfR2genind(,sep = "[|/]")
+# read in pop panel data
+pop.data <-  read.table("vervet.population.panel", sep = "\t", header = FALSE)
+colnames(pop.data) <- c("sample", "pop", "region", "country", "taxon")
+# filter out non sabaeus, badgirlriri, n ghana
+pop.data <- pop.data %>% filter(taxon == "sabaeus" | region != "Barbados" | country != "Ghana")
+
+# matching pop panel to genind
+strata(FOXP3_genind) <- pop.data[(match(indNames(FOXP3_genind), pop.data$sample)), ] 
+# set country as population:
+setPop(FOXP3_genind) <- ~country
+
+# create genlight object, dunno what this is do my hw
+FOXP3_genlight <- vcfR2genlight(FOXP3)
+strata(FOXP3_genlight) <- pop.data[(match(indNames(FOXP3_genlight), pop.data$sample)), ]
+setPop(FOXP3_genlight) <- ~country # dgaf abt filtering more
+# turns out i do gaf abt filtering more
+```
+
+PCA
+
+```{r, pca1}
+pca <- glPca(FOXP3_genlight, nf = 2) # work the pca
+barplot(100*pca$eig/sum(pca$eig), col = heat.colors(50), main="PCA Eigenvalues",ylab="% of Variance Explained",xlab="Eigenvalues") # which eigenvalues are real
+```
+
+Eigenvalues 1 and 2 are real, maybe 3 is interesting but probably not you know how it goes.
+
+```{r, pca2}
+pca.scores <- as.data.frame(pca$scores) # df look pretty <3
+pca.scores$Country <- pop(FOXP3_genlight)
+# pca.scores <- pca.scores %>% filter(is.na(Country) == F)
+ggplot(pca.scores, aes(x=PC1, y=PC2, colour=Country)) + 
+      geom_point(size=2, alpha = 0.5) +
+      stat_ellipse(level = 0.95, size = 1) + 
+      scale_color_manual(values=c("steelblue", "darkgreen"))
+# looks boring what is the significance
+
+adonis1 <- adonis2(pca$scores ~ Country, data = pca.scores, method='eu', na.rm = TRUE)
+```
+
+# Signs of selection
+
+Neutrality statistics yippee
+
+```{r, objects}
+# popgenome is dead and gone RIP inPEACE
+sabFOXP3.dna <- vcfR2DNAbin(FOXP3)
+
+tajima1 <- tajima.test(sabFOXP3.dna)
+tajima1
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
