@@ -1,0 +1,259 @@
+---
+title: "FOXP3-XPEHH"
+author: "Jimmy Erkens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+    toc_float: true
+    code_folding: show
+    theme: journal
+---
+
+# Libraries
+
+```{r, libs, message = F}
+library(tidyverse)
+library(snpStats)
+library(VariantAnnotation)
+library(vcfR)
+library(adegenet)
+library(ggplot2)
+library(vegan)
+library(poppr)
+library(dplyr)
+library(pegas)
+library(hierfstat)
+library(reshape2)
+library(fields)
+library(RColorBrewer)
+library(mapplots)
+library(LEA)
+```
+
+# Hardy Weinberg
+
+```{r, hwe}
+library(tidyverse)
+vcftools.carib.HWE <- read.table("caribFOXP3.hwe", header = T)
+vcftools.carib.HWE.sig <-
+  as_tibble(vcftools.carib.HWE) %>%
+  dplyr::select(CHR,POS,OBS.HOM1.HET.HOM2.,ChiSq_HWE,P_HWE) %>%
+  filter(P_HWE <= 0.05); vcftools.carib.HWE.sig
+
+vcftools.gambia.HWE <- read.table("gambiaFOXP3.hwe", header = T)
+vcftools.gambia.HWE.sig <-
+  as_tibble(vcftools.gambia.HWE) %>% 
+  dplyr::select(CHR, POS, OBS.HOM1.HET.HOM2., ChiSq_HWE, P_HWE) %>% 
+  filter(P_HWE <= 0.05); vcftools.gambia.HWE.sig
+
+# get CHR & POS in vectors
+# whats going on w some of these snps sounds like drift to me but smths up w 46347045 and 46347625 show up in Tajimna's D later (insignificatn bummer)
+```
+
+St Kitts and Nevis:
+\
+\
+CAEX:46347045-(14/9/11) 0.00676 3'UTR Variant\
+\
+CAEX:46347625-(14/9/11) 0.00676 3'UTR Variant\
+\
+CAEX:46354051-(26/4/4) 0.00285 Intronic\
+\
+\
+\
+The Gambia:
+\
+\
+CAEX:46347045-(5/3/14) 0.00280 3'UTR Variant\
+\
+CAEX:46347625-(5/3/14) 0.00280 3'UTR Variant\
+\
+CAEX:46351255-(18/0/4) 0.0000413 Intronic\
+\
+CAEX:46352998-(7/2/13) 0.000173 Intronic\
+\
+CAEX:46355021-(6/5/11) 0.00211 Splice Region Variant
+
+# Linkage Disequilibrium
+
+## St Kitts and Nevis
+
+```{r, sknld}
+# linkage 
+sknFOXP3vcf <- readVcf("caribFOXP3.vcf")
+sknFOXP3matrix <- genotypeToSnpMatrix(sknFOXP3vcf)
+sknFOXP3_LD <- ld(sknFOXP3matrix$genotypes, depth=96, stats="R.squared")
+head(sknFOXP3_LD)
+# visualize
+cols=colorRampPalette(c("yellow","red"))(10)
+image(sknFOXP3_LD, lwd=0, cuts=9, col.regions=cols, colorkey=TRUE)
+# ughhhhhhhhhh what does this even mean
+```
+
+## The Gambia
+
+```{r, gambiald}
+# linkage 
+gambiaFOXP3vcf <- readVcf("gambiaFOXP3.vcf")
+gambiaFOXP3matrix <- genotypeToSnpMatrix(gambiaFOXP3vcf)
+gambiaFOXP3_LD <- ld(gambiaFOXP3matrix$genotypes, depth=96, stats="R.squared")
+head(sknFOXP3_LD)
+# visualize
+cols=colorRampPalette(c("yellow","red"))(10)
+image(gambiaFOXP3_LD, lwd=0, cuts=9, col.regions=cols, colorkey=TRUE)
+```
+
+I don't know how to interpret these given that it's only like 4 blips. 
+
+# Population Structure
+
+
+## Data initialization
+
+```{r, popstructure_cleaning}
+FOXP3 <- read.vcfR("vervFOXP3.real.vcf", verbose = TRUE) #real contains all sabaeus not in Barbados (these FREAKS) and GhanaF
+# copied and pasted from OG document
+FOXP3_genind <- vcfR2genind(FOXP3, sep = "[|/]")
+
+#We'll read in our population panel data: 
+pop.data <- read.table("vervet.population.panel", sep = "\t", header = FALSE)
+colnames(pop.data) <- c("sample", "pop", "region", "country", "taxon")
+
+#And we need to filter out all non-SE individuals:
+pop.data <- pop.data %>% filter(taxon == "sabaeus" | region != "Barbados" | country != "Ghana")
+
+#Check that all the samples in the VCF and the population data frame are the same. Should be TRUE. 
+all(colnames(FOXP3@gt)[-1] == pop.data$AccessID)
+
+strata(FOXP3_genind) <- pop.data[(match(indNames(FOXP3_genind), pop.data$sample)), ] 
+
+#And setting the Population variable as the population:
+
+setPop(FOXP3_genind) <- ~country
+
+#We'll also create a GENLIGHT object for PCA:
+
+FOXP3_genlight <- vcfR2genlight(FOXP3)
+strata(FOXP3_genlight) <- pop.data[(match(indNames(FOXP3_genlight), pop.data$sample)), ]
+setPop(FOXP3_genlight) <- ~country
+
+```
+
+## PCA
+
+```{r, pca}
+# yo we first need to do the pca
+pca <- glPca(FOXP3_genlight, nf = 2)
+barplot(100*pca$eig/sum(pca$eig), col = heat.colors(50), main="PCA Eigenvalues",ylab="% of Variance Explained",xlab="Eigenvalues")
+
+# plot her whoa shoutout PC1
+
+pca.scores <- as.data.frame(pca$scores)
+pca.scores$Country <- pop(FOXP3_genlight)
+
+#ggplot
+
+ggplot(pca.scores, aes(x=PC1, y=PC2, colour=Country)) + 
+  geom_point(size=2, position = "jitter") + # originally had alpha value going on
+  stat_ellipse(level = 0.95, size = 1) + 
+  scale_color_manual(values=c("steelblue", "pink")) # i'm so confused by the confidence ellipse for the gambia 
+
+# AMOVA 
+adonis2 <- adonis2(pca$scores ~ Country, data = pca.scores, method='eu', na.rm = TRUE); adonis2
+# WE'RE SIGNIFICANT WE'RE SO BACK
+```
+
+## DAPC
+
+```{r, dapc}
+dapc <- dapc(FOXP3_genind, n.pca = 2, n.da = 2)
+dapc$grp #this will show us the grouping variables, in this case it will be population
+scatter(dapc, cex = 2, legend = TRUE, clabel = F, posi.leg = "bottomleft", scree.pca = TRUE,
+        posi.pca = "topright", cleg = 0.75, col=c("steelblue", "pink")) # idk why im not getting the cute scree pca but this seems cool
+```
+
+## AMOVA
+
+```{r, amova}
+# poppr's are an endangered species here :/
+ploidy(FOXP3_genlight) <- 2
+amova1 <- poppr.amova(FOXP3_genlight, ~country/region)
+amova1
+# significance tests
+amova.test <- randtest(amova1)
+plot(amova.test)
+amova.test
+```
+
+Populations are not homogenous! Most of the variation surprisingly is between individuals in the SAME regions. Stratifications are real, significant for each comparison. Wild.
+
+## Fixation index
+
+```{r, all_fst}
+wc(FOXP3_genind)
+```
+
+27% of variants of FOXP3 not shared between populations (Gambia and SKN)
+
+```{r,lower_triangle}
+lower_triangle <- function(x){
+    x[lower.tri(x)] <- NA
+    return(x)
+}
+```
+
+
+```{r, fst_by_pop}
+setPop(FOXP3_genind) <- ~region # so we can actually see things
+FOXP3Fst <- genet.dist(FOXP3_genind[1:56,],method="Nei87")
+FOXP3Fst
+# pvals
+FOXP3FstPval <- boot.ppfst(dat=FOXP3_genind[1:56],nboot=100,quant=c(0.025,0.975),diploid=T,)
+FOXP3FstPval
+
+# ducks in a row for ggplot
+FOXP3Fst <- as.matrix(FOXP3Fst)[c("St.Kitts", "Nevis", "Downriver", "Upriver"), c("St.Kitts", "Nevis", "Downriver", "Upriver")]
+
+FOXP3Fst <- lower_triangle(FOXP3Fst)
+melted_fst <- melt(FOXP3Fst, na.rm = T) # beautific
+
+# ggplot
+ggplot(data = melted_fst, aes(x=Var1, y=Var2, fill=value)) + theme_minimal() + ylab(NULL) + xlab(NULL) + coord_fixed() + theme(axis.text=element_text(angle=45, vjust=0.5)) + geom_tile(color = "white")
+```
+
+This is neato, makes sense given what I know about phylogenies.
+
+## STRUCTURE COME BACK TO THIS OML I WANT THIS TO WORK
+
+```{r, STRUCTURE}
+library(LEA)
+setwd("/Users/jameserkens/Documents/SMAGL/foxp3-xpehh")
+# R aborts for me whenever I use my truncated set idk what's going on there other than a textedit problem
+# FOXP3_geno <- vcf2geno("vervFOXP3.real.vcf") # no clue why my filtered set just isn't working :(
+```
+
+# Signs of selection 
+
+## Tajimas D
+
+```{r, tajimaD_skn}
+skn <- read.vcfR("caribFOXP3.vcf") # DNAbin object
+sknFOXP3.dna <- vcfR2DNAbin(skn)
+tajima1 <- tajima.test(sknFOXP3.dna); tajima1
+# now we use vcftools
+
+slide.skn <- read.table("sknFOXP3.Tajima.D",header=TRUE); slide.skn %>% filter(N_SNPS > 0)# consistent w the SNPs and HWE
+```
+
+Insignificant! Positive value, balancing selection.
+
+```{r, tajimaD_gambia}
+gambia <- read.vcfR("gambiaFOXP3.vcf") #DNAbin object
+gambiaFOXP3.dna <- vcfR2DNAbin(gambia)
+tajima2 <- tajima.test(gambiaFOXP3.dna); tajima2
+slide.gambia <- read.table("gambiaFOXP3.Tajima.D", header =T); slide.gambia %>% filter(N_SNPS > 0) # is this interesting like at all, is this just drift going on????
+```
+
+It seems very uninteresting! Let me know your thoughts.
