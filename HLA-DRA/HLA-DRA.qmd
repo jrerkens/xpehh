@@ -1,0 +1,256 @@
+---
+title: "HLA-DRA"
+format: html
+editor: visual
+---
+
+# HLA-DRA
+
+Note this gene is only like 7k bp. 10k upstream is approaching *ENSCSAG00000009375* which is also implicated in MHC-Class II protein complex.
+
+## Libraries
+
+```{r, message = F}
+library(tidyverse)
+library(snpStats)
+library(VariantAnnotation)
+library(vcfR)
+library(adegenet)
+library(ggplot2)
+library(vegan)
+library(poppr)
+library(dplyr)
+library(pegas)
+library(hierfstat)
+library(reshape2)
+library(fields)
+library(RColorBrewer)
+library(mapplots)
+library(rMSA)
+library(GenomicFeatures)
+library(biomaRt)
+#library(LEA)
+```
+
+## LD
+
+### SKN
+
+Copied and pasted from Pipeline HTML
+
+```{r, HWE}
+sknHLADRAvcf <- readVcf("sknHLA-DRA.vcf")
+sknHLADRAmatrix <- genotypeToSnpMatrix(sknHLADRAvcf)
+sknHLADRA_LD <- ld(sknHLADRAmatrix$genotypes, depth=96, stats="R.squared")
+head(sknHLADRA_LD)
+```
+
+Visual
+
+```{r}
+cols=colorRampPalette(c("yellow","red"))(10)
+image(sknHLADRA_LD, lwd=0, cuts=9, col.regions=cols, colorkey=TRUE)
+```
+
+### Gambia
+
+```{r}
+gambiaHLADRAvcf <- readVcf("gambiaHLA-DRA.vcf")
+gambiaHLADRAmatrix <- genotypeToSnpMatrix(gambiaHLADRAvcf)
+gambiaHLADRA_LD <- ld(gambiaHLADRAmatrix$genotypes, depth=96, stats="R.squared")
+head(sknHLADRA_LD)
+```
+
+Visual
+
+```{r}
+cols=colorRampPalette(c("yellow","red"))(10)
+image(gambiaHLADRA_LD, lwd=0, cuts=9, col.regions=cols, colorkey=TRUE)
+```
+
+## Population Structure
+
+Data init
+
+```{r}
+HLADRA <- read.vcfR("popstrHLA-DRA.vcf", verbose = TRUE)
+HLADRA_genind <- vcfR2genind(HLADRA, sep = "[|/]")
+
+#We'll read in our population panel data: 
+pop.data <- read.table("vervet.population.panel", sep = "\t", header = FALSE)
+colnames(pop.data) <- c("sample", "pop", "region", "country", "taxon")
+
+
+pop.data <- pop.data %>% filter(taxon == "sabaeus" | region != "Barbados" | country != "Ghana")
+
+#Check that all the samples in the VCF and the population data frame are the same. Should be TRUE. 
+all(colnames(HLADRA@gt)[-1] == pop.data$AccessID)
+strata(HLADRA_genind) <- pop.data[(match(indNames(HLADRA_genind), pop.data$sample)), ] 
+
+#And setting the Population variable as the population:
+
+setPop(HLADRA_genind) <- ~region
+
+#We'll also create a GENLIGHT object for PCA:
+
+HLADRA_genlight <- vcfR2genlight(HLADRA)
+strata(HLADRA_genlight) <- pop.data[(match(indNames(HLADRA_genlight), pop.data$sample)), ]
+setPop(HLADRA_genlight) <- ~region
+```
+
+PCA
+
+```{r}
+pca <- glPca(HLADRA_genlight, nf = 2)
+barplot(100*pca$eig/sum(pca$eig), col = heat.colors(50), main="PCA Eigenvalues",ylab="% of Variance Explained",xlab="Eigenvalues")
+```
+
+PC1 explains well over half of the variation, both PC2 and PC3 are soaking up a fair bit of variation as well.
+
+### PCA Plot
+
+```{r}
+setPop(HLADRA_genlight) <- ~region
+pca.scores <- as.data.frame(pca$scores)
+pca.scores$Region <- pop(HLADRA_genlight)
+
+#ggplot
+
+ggplot(pca.scores, aes(x=PC1, y=PC2, colour=Region)) + 
+  geom_point(size=2, position = "jitter") + # originally had alpha value going on
+  stat_ellipse(level = 0.95, size = 1) 
+```
+
+Hm
+
+## DAPC
+
+```{r}
+dapc <- dapc(HLADRA_genind, n.pca = 2, n.da = 2)
+dapc$grp
+scatter(dapc, cex = 2, legend = TRUE, clabel = F, posi.leg = "bottomleft", scree.pca = TRUE,
+        posi.pca = "topright", cleg = 0.75)
+```
+
+Is there a bias in favor of Downriver variants in the dataset? Some SK dudes seem similar to some of the Upriver variants as well.
+
+## AMOVA
+
+```{r}
+ploidy(HLADRA_genlight) <- 2
+amova1 <- poppr.amova(HLADRA_genlight, ~country/region)
+amova1
+amova.test <- randtest(amova1)
+plot(amova.test)
+amova.test
+```
+
+There's a high high high degree of variation within and between samples.
+
+## FST
+
+```{r}
+setPop(HLADRA_genind) <- ~country
+wc(HLADRA_genind)
+setPop(HLADRA_genind) <- ~region
+wc(HLADRA_genind)
+```
+
+3% of variants are unique between Caribbean and Gambia, 2% unique to region.
+
+```{r}
+lower_triangle <- function(x){
+    x[lower.tri(x)] <- NA
+    return(x)
+}
+```
+
+FST pvals
+
+```{r}
+HLADRAFst <- genet.dist(HLADRA_genind[1:56,],method="Nei87")
+HLADRAFst
+HLADRAFstPval <- boot.ppfst(dat=HLADRA_genind[1:56],nboot=100,quant=c(0.025,0.975),diploid=T,)
+HLADRAFstPval
+```
+
+GGplot
+
+```{r}
+HLADRAFst <- as.matrix(HLADRAFst)[c("St.Kitts", "Nevis", "Downriver", "Upriver"), c("St.Kitts", "Nevis", "Downriver", "Upriver")]
+
+HLADRAFst <- lower_triangle(HLADRAFst)
+melted_fst <- melt(HLADRAFst, na.rm = T) # beautific
+
+# ggplot
+ggplot(data = melted_fst, aes(x=Var1, y=Var2, fill=value)) + theme_minimal() + ylab(NULL) + xlab(NULL) + coord_fixed() + theme(axis.text=element_text(angle=45, vjust=0.5)) + geom_tile(color = "white")
+
+
+```
+
+## Selective Sweeps
+
+Importing in allele count data
+
+```{r}
+sknHLADRA <- read.vcfR("sknHLA-DRA.vcf")
+gt <- extract.gt(sknHLADRA, element = "GT") #extract genotypes matrix
+gt <- as.data.frame(t(gt)) #create dataframe from transposed GT matrix (so that SNP position is column value)
+gt<-data.frame(lapply(gt,as.character),stringsAsFactors=FALSE) #convert factor levels to characters in GT
+
+#change values to reflect count of ALT alleles, e.g., "0|0" = 0, "1|0" = 1, "1|1"= 2:
+gt[gt=="0|0"]<-0
+gt[gt=="0|1"]<-1
+gt[gt=="1|0"]<-1
+gt[gt=="1|1"]<-2
+
+gt<-data.frame(lapply(gt,as.numeric),stringsAsFactors=FALSE) #now convert to numbers
+ALTcount<-gt %>% summarise_all(sum, na.rm = TRUE) #add up each column
+ALTcount<-as.data.frame(t(ALTcount)) #transpose
+ALTcount<-tibble::rownames_to_column(ALTcount,"POS") #convert row names to column
+ALTcount<- ALTcount %>% separate(POS,c("CHROM","POS")) #split POS columns into CHROM/POS
+
+#Now, remember when we made the file outREFALT.INFO? Let's take that and merge it with this file, using "POS" as the reference:
+refalt<-read.table("outREFALT.INFO")
+names(refalt)<-c("CHROM1","POS","REF","ALT")
+refalt$POS<-as.character(refalt$POS) #change POS to characters in refalt
+refalt<-distinct(refalt) #get rid of duplicate rows
+ALTcount<-ALTcount %>% left_join(refalt,by="POS") %>% dplyr::select("CHROM","POS","V1","REF","ALT","V1") #merge them
+
+#Now to create the new allele count columns:
+ALTcount<-
+  ALTcount %>%
+  mutate(A = if_else(ALT == "A",V1,if_else(REF=="A",146-V1,0))) %>%
+  mutate(C = if_else(ALT == "C",V1,if_else(REF=="C",146-V1,0))) %>%
+  mutate(G = if_else(ALT == "G",V1,if_else(REF=="G",146-V1,0))) %>%
+  mutate(T = if_else(ALT == "T",V1,if_else(REF=="T",146-V1,0)))
+head(ALTcount)
+write.table(ALTcount,file="HLADRA_popallele.txt",sep=" ",row.names=F,quote=F)
+```
+
+SKN Sequence Alignment
+
+```{r}
+#devtools::install_version("dbplyr", version = "2.3.4")
+#Here, we're defining the database (mart) as Ensembl, and the dataset as Chlorocebus sabaeus.
+library(biomaRt)
+mart<-useMart("ensembl",dataset="csabaeus_gene_ensembl")
+#Here, we're loading the sequence for our region of interest (note the chromosome and positions). By asking for "gene_exon_intron", we ask for all nucleotides in the coding region of interest (this can be changed if you only want, for example, exons):
+
+vervHLADRAgene=biomaRt::getSequence(id="HLA-DRA",type="hgnc_symbol",seqType="gene_exon_intron",mart=mart)
+show(vervHLADRAgene)
+
+#To get the flanking regions (remember, we added 10k bp up- and downstream), we need to submit separate queries:
+
+vervHLADRAup=biomaRt::getSequence(id="HLA-DRA",type="hgnc_symbol",upstream=10000,seqType="gene_flank",mart=mart)
+show(vervHLADRAup)
+
+vervHLADRAdown=biomaRt::getSequence(id="HLA-DRA",type="hgnc_symbol",downstream=10000,seqType="gene_flank",mart=mart)
+show(vervHLADRAdown)
+
+#Let's save these as FASTA files, for ease of use:
+
+exportFASTA(vervHLADRAup,file="vervHLADRAup.fa") #POS 87512665-87502666
+exportFASTA(vervHLADRAgene,file="vervHLADRAgene.fa") #POS 87502665-87492195
+exportFASTA(vervHLADRAdown,file="vervHLADRAdown.fa") #POS 87492194-87482195
+```
