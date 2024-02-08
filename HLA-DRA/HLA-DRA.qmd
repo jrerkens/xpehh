@@ -32,14 +32,27 @@ library(biomaRt)
 #library(LEA)
 ```
 
+## HWE
+
+Doing this to filter out for `rehh` later in the document.
+
+```{r}
+sknHLADRAvcf <- readVcf("sknHLA-DRA.vcf")
+vcftools.skn.HWE<-read.table("skn_HLA-DRA.hwe",header=TRUE)
+vcftools.skn.HWE.sig <-
+  vcftools.skn.HWE %>%
+  filter(P_HWE <= 0.05)
+vcftools.skn.HWE.sig
+significant_hwe_positions <- vcftools.skn.HWE.sig$POS
+```
+
 ## LD
 
 ### SKN
 
 Copied and pasted from Pipeline HTML
 
-```{r, HWE}
-sknHLADRAvcf <- readVcf("sknHLA-DRA.vcf")
+```{r, LD}
 sknHLADRAmatrix <- genotypeToSnpMatrix(sknHLADRAvcf)
 sknHLADRA_LD <- ld(sknHLADRAmatrix$genotypes, depth=96, stats="R.squared")
 head(sknHLADRA_LD)
@@ -81,7 +94,7 @@ pop.data <- read.table("vervet.population.panel", sep = "\t", header = FALSE)
 colnames(pop.data) <- c("sample", "pop", "region", "country", "taxon")
 
 
-pop.data <- pop.data %>% filter(taxon == "sabaeus" | region != "Barbados" | country != "Ghana")
+pop.data <- pop.data %>% filter(taxon == "sabaeus" & region != "Barbados" & country != "Ghana")
 
 #Check that all the samples in the VCF and the population data frame are the same. Should be TRUE. 
 all(colnames(HLADRA@gt)[-1] == pop.data$AccessID)
@@ -188,9 +201,9 @@ ggplot(data = melted_fst, aes(x=Var1, y=Var2, fill=value)) + theme_minimal() + y
 
 ```
 
-## Selective Sweeps
+## Selective Sweeps (Chris tell me how to interpret pls)
 
-Importing in allele count data
+### Importing in allele count data
 
 ```{r}
 sknHLADRA <- read.vcfR("sknHLA-DRA.vcf")
@@ -211,7 +224,7 @@ ALTcount<-tibble::rownames_to_column(ALTcount,"POS") #convert row names to colum
 ALTcount<- ALTcount %>% separate(POS,c("CHROM","POS")) #split POS columns into CHROM/POS
 
 #Now, remember when we made the file outREFALT.INFO? Let's take that and merge it with this file, using "POS" as the reference:
-refalt<-read.table("outREFALT.INFO")
+refalt<-read.table("outREFALT.txt")
 names(refalt)<-c("CHROM1","POS","REF","ALT")
 refalt$POS<-as.character(refalt$POS) #change POS to characters in refalt
 refalt<-distinct(refalt) #get rid of duplicate rows
@@ -220,15 +233,15 @@ ALTcount<-ALTcount %>% left_join(refalt,by="POS") %>% dplyr::select("CHROM","POS
 #Now to create the new allele count columns:
 ALTcount<-
   ALTcount %>%
-  mutate(A = if_else(ALT == "A",V1,if_else(REF=="A",146-V1,0))) %>%
-  mutate(C = if_else(ALT == "C",V1,if_else(REF=="C",146-V1,0))) %>%
-  mutate(G = if_else(ALT == "G",V1,if_else(REF=="G",146-V1,0))) %>%
-  mutate(T = if_else(ALT == "T",V1,if_else(REF=="T",146-V1,0)))
+  mutate(A = if_else(ALT == "A",V1,if_else(REF=="A",68-V1,0))) %>%
+  mutate(C = if_else(ALT == "C",V1,if_else(REF=="C",68-V1,0))) %>%
+  mutate(G = if_else(ALT == "G",V1,if_else(REF=="G",68-V1,0))) %>%
+  mutate(`T` = if_else(ALT == "T",V1,if_else(REF=="T",68-V1,0)))
 head(ALTcount)
 write.table(ALTcount,file="HLADRA_popallele.txt",sep=" ",row.names=F,quote=F)
 ```
 
-SKN Sequence Alignment
+### SKN Sequence Alignment
 
 ```{r}
 #devtools::install_version("dbplyr", version = "2.3.4")
@@ -250,7 +263,381 @@ show(vervHLADRAdown)
 
 #Let's save these as FASTA files, for ease of use:
 
-exportFASTA(vervHLADRAup,file="vervHLADRAup.fa") #POS 87512665-87502666
-exportFASTA(vervHLADRAgene,file="vervHLADRAgene.fa") #POS 87502665-87492195
-exportFASTA(vervHLADRAdown,file="vervHLADRAdown.fa") #POS 87492194-87482195
+exportFASTA(vervHLADRAup,file="vervHLADRAup.fa")
+exportFASTA(vervHLADRAgene,file="vervHLADRAgene.fa")
+exportFASTA(vervHLADRAdown,file="vervHLADRAdown.fa") 
 ```
+
+### Same but for *macaca fascicularis*
+
+The analogous gene in *macaca fascicularis* is *MAMU-DRA*, it's huge compared to green monkeys
+
+```{r}
+mart2<-useMart("ensembl",dataset="mfascicularis_gene_ensembl")
+
+#Here, we're loading the sequence for our region of interest (note the chromosome and positions). By asking for "gene_exon_intron", we ask for all nucleotides in the coding region of interest (this can be changed if you only want, for example, exons):
+
+mfasHLADRAgene=biomaRt::getSequence(id="HLA-DRA",type="hgnc_symbol",seqType="gene_exon_intron",mart=mart2)
+show(mfasHLADRAgene)
+
+#mmulHLADRAgene=biomaRt::getSequence(id="HLADRA",type="hgnc_symbol",seqType="gene_exon_intron",mart=mart2) #not working!
+
+#To get the flanking regions (remember, we added 10k bp up- and downstream), we need to submit separate queries. I added an extra 300bp just in case there are a lot of indels in this region compared to the vervet reference:
+
+mfasHLADRAup=biomaRt::getSequence(id="HLA-DRA",type="hgnc_symbol",upstream=10300,seqType="gene_flank",mart=mart2)
+show(mfasHLADRAup)
+
+mfasHLADRAdown=biomaRt::getSequence(id="HLA-DRA",type="hgnc_symbol",downstream=10300,seqType="gene_flank",mart=mart2)
+show(mfasHLADRAdown)
+
+#mmulHLADRAup=biomaRt::getSequence(id="HLADRA",type="hgnc_symbol",upstream=10300,seqType="gene_flank",mart=mart2)
+#show(mmulHLADRAup)
+
+#mmulHLADRAdown=biomaRt::getSequence(id="HLADRA",type="hgnc_symbol",downstream=10300,seqType="gene_flank",mart=mart2)
+#show(mmulHLADRAdown)
+
+#Let's save these as FASTA files, for ease of use:
+
+exportFASTA(mfasHLADRAup,file="mfasHLADRAup.fa")
+exportFASTA(mfasHLADRAgene,file="mfasHLADRAgene.fa") 
+exportFASTA(mfasHLADRAdown,file="mfasHLADRAdown.fa")
+```
+
+### MAFFT
+
+I cut out the up/down stream in TextEdit bc Jalview sucked for that
+
+```{r}
+hladra<-readDNAStringSet("HLADRAall.fa")
+hladra 
+```
+
+Ref Align
+
+```{r}
+hladra_al<-rMSA::mafft(hladra)
+detail(hladra_al)
+```
+
+Exporting to FASTA
+
+```{r}
+DNAStr = as(hladra_al, "DNAStringSet")
+writeXStringSet(DNAStr, file="HLADRA_align.fa")
+```
+
+Trimmed file
+
+```{r}
+hladra_trim <-readDNAMultipleAlignment("HLADRA_align_trim.fa")
+```
+
+### Input file and est-sfs
+
+```{r}
+library(Biostrings)
+library(IRanges)
+cm<-consensusMatrix(hladra_trim,baseOnly=TRUE)
+hladra_align_counts<-as.data.frame(t(cm))
+head(hladra_align_counts)
+# macaques
+rowmask(hladra_trim) <- IRanges(start=2)
+cm_mfas<-consensusMatrix(hladra_trim,baseOnly=TRUE)
+hladra_align_counts_mfas<-as.data.frame(t(cm_mfas))
+head(hladra_align_counts_mfas)
+```
+
+Counts are the same?
+
+```{r}
+length(hladra_align_counts_mfas$A) #30471 bp
+length(ALTcount$A) #826 bp
+
+
+POS<-c(rev(39612402:39639261))
+POS<-as.character(POS)
+
+hladra_align_counts_mfas<-cbind(POS,hladra_align_counts_mfas)
+head(hladra_align_counts_mfas)
+
+```
+
+Final allele counts
+
+```{r}
+allele_counts<-ALTcount %>% left_join(hladra_align_counts_mfas,by="POS")
+
+allele_counts<-allele_counts %>% dplyr::filter(other!="1") #none of our UCP1 variant sites are missing!
+
+#Change the column names for *Macaca* to the complement nucleotides:
+
+names(allele_counts)<-c("CHROM","POS","V1","REF","ALT","A.pop","C.pop","G.pop","T.pop","T.mfas","G.mfas","C.mfas","A.mfas","other.mfas")
+
+#and reorganize so the reference nucleotide counts are in ACGT order:
+
+allele_counts<-allele_counts %>% dplyr::select("CHROM","POS","V1","REF","ALT","A.pop","C.pop","G.pop","T.pop","A.mfas","C.mfas","G.mfas","T.mfas")
+head(allele_counts)
+
+allele_counts_final<-allele_counts %>%
+  dplyr::select("A.pop","C.pop","G.pop","T.pop","A.mfas","C.mfas","G.mfas","T.mfas") %>%
+  tidyr::unite("pop",A.pop:T.pop,remove=T,sep=",") %>%
+  tidyr::unite("mfas",A.mfas:T.mfas,remove=T,sep=",")
+
+#And here we'll save it as a plain text file without the header, so it can be used in {est-sfs}:
+
+write.table(allele_counts_final,file="hladra_allele_data.txt",sep=" ",col.names=F,row.names=F,quote=F)
+head(allele_counts_final)
+```
+
+### REHH
+
+```{r}
+library(rehh)
+hap<-data2haplohh(hap_file="hap_sknHLA-DRA.out", map_file="map_sknHLA-DRA.out", 
+                  chr.name="CAE17",allele_coding="map")
+hap@chr.name <- "17"
+```
+
+Cool, we did it, and we have some IHH_A scores that aren't 0 or NA!
+
+```{r}
+ehh<-scan_hh(hap,limhaplo=2,limehh=0.5,limehhs=0.5,maxgap=NA,threads=1)
+ihs <- ihh2ihs(ehh,freqbin=0.15)
+cr.se<-calc_candidate_regions(ihs,threshold=2,pval=TRUE,window_size=3000,overlap=300,min_n_extr_mrk=1)
+cr.se
+```
+
+Plotting regions under selection, potentially....
+
+```{r}
+manhattanplot(ihs,pval=TRUE,threshold=2,pch=16, chr.name="17",cr=cr.se,main="iHS")
+
+```
+
+At the time of writing this, Ensembl is taking her sweet time, where in the genome is this? I'm pretty sure it's in the actual gene itself but I could be wrong.
+
+Pihs values
+
+```{r}
+pihs<-ihs$ihs[,c(2,4)]
+# pihs
+# filter her out
+pihs.sig<-
+  pihs %>%
+  filter(LOGPVALUE >= 1.25 | LOGPVALUE <= -1.25)
+pihs.sig
+```
+
+filtering out significant hwe values!
+
+```{r}
+pihs.sig %>%
+  as_tibble()
+  mutate(contains = POSITION %in% significant_hwe_positions) %>%
+  summarise(all = sum(contains)) %>%
+  filter(all > 2) %>%
+  select(-all) %>%
+  inner_join(pihs.sig)
+```
+
+Okay, let's try out 39631453, 39632808, and 39633578 (picked three, significant HWE positions, assuming LD between some of these clumps). EDIT, I'm just picking and going through it now bc i have no clue about LD, picking and choosing by vibes is dumb.
+
+#### 39631453 (Block 1)
+
+EHH
+
+```{r}
+ehh_39631453 <- calc_ehh(hap,mrk="CAE17-39631453")
+plot(ehh_39631453,
+     main="EHH at CAE17:39631453",
+     col=c("blue2","gold2"))
+
+```
+
+Bifurcation Plot
+
+```{r}
+furcation_39631453 <-calc_furcation(hap,mrk="CAE17-39631453")
+plot(furcation_39631453,
+     lwd=0.1,
+     col=c("blue2","gold2"),
+     cex.lab=0.3,
+     main="Bifurcation CAE17:39631453",
+     legend.xy.coords="none",
+     xlim=c(39620000,39635000))
+```
+
+I think this looks like selection, but I need more experience and practice to see what's up.
+
+#### 39631487
+
+```{r}
+ehh_39631487 <- calc_ehh(hap,mrk="CAE17-39631487")
+plot(ehh_39631487,
+     main="EHH at CAE17:39631487",
+     col=c("blue2","gold2"))
+```
+
+OKAY, this is probably LD
+
+#### 39631526
+
+```{r}
+ehh_39631526 <- calc_ehh(hap,mrk="CAE17-39631526")
+plot(ehh_39631526,
+     main="EHH at CAE17:39631526",
+     col=c("blue2","gold2"))
+```
+
+LD!
+
+#### 39632771 (Block 2)
+
+```{r}
+ehh_39632771 <- calc_ehh(hap,mrk="CAE17-39632771")
+plot(ehh_39632771,
+     main="EHH at CAE17:39632771",
+     col=c("blue2","gold2"))
+```
+
+Bifurslaytion
+
+```{r}
+furcation_39632771 <-calc_furcation(hap,mrk="CAE17-39632771")
+plot(furcation_39632771,
+     lwd=0.1,
+     col=c("blue2","gold2"),
+     cex.lab=0.3,
+     main="Bifurcation CAE17:39632771",
+     legend.xy.coords="none",
+     xlim=c(39630000,39640000))
+```
+
+#### 39632808 (Block 3)
+
+```{r}
+ehh_39632808 <- calc_ehh(hap,mrk="CAE17-39632808")
+plot(ehh_39632808,
+     main="EHH at CAE17:39632808",
+     col=c("blue2","gold2"))
+```
+
+Bifurcation
+
+```{r}
+furcation_39632808 <-calc_furcation(hap,mrk="CAE17-39632808")
+plot(furcation_39632808,
+     lwd=0.1,
+     col=c("blue2","gold2"),
+     cex.lab=0.3,
+     main="Bifurcation CAE17:39632808",
+     legend.xy.coords="none",
+     xlim=c(39630000,39640000))
+```
+
+#### 39633524 (Block 4)
+
+```{r}
+ehh_39633524 <- calc_ehh(hap,mrk="CAE17-39633524")
+plot(ehh_39633524,
+     main="EHH at CAE17:39633524",
+     col=c("blue2","gold2"))
+```
+
+Bifurcation
+
+```{r}
+furcation_39633524 <-calc_furcation(hap,mrk="CAE17-39633524")
+plot(furcation_39633524,
+     lwd=0.1,
+     col=c("blue2","gold2"),
+     cex.lab=0.3,
+     main="Bifurcation CAE17:39633524",
+     legend.xy.coords="none",
+     xlim=c(39630000,39640000))
+```
+
+#### 39633531
+
+```{r}
+ehh_39633531 <- calc_ehh(hap,mrk="CAE17-39633531")
+plot(ehh_39633524,
+     main="EHH at CAE17:39633531",
+     col=c("blue2","gold2"))
+```
+
+LD block
+
+#### 39633547
+
+```{r}
+ehh_39633547 <- calc_ehh(hap,mrk="CAE17-39633547")
+plot(ehh_39633547,
+     main="EHH at CAE17:39633547",
+     col=c("blue2","gold2"))
+```
+
+DITTO
+
+#### 39633578 (Block 5)
+
+```{r}
+ehh_39633578 <- calc_ehh(hap,mrk="CAE17-39633578")
+plot(ehh_39633578,
+     main="EHH at CAE17:39633578",
+     col=c("blue2","gold2"))
+```
+
+Bifurcationi
+
+```{r}
+furcation_39633578 <-calc_furcation(hap,mrk="CAE17-39633578")
+plot(furcation_39633578,
+     lwd=0.1,
+     col=c("blue2","gold2"),
+     cex.lab=0.3,
+     main="Bifurcation CAE17:39633578",
+     legend.xy.coords="none",
+     xlim=c(39630000,39640000))
+```
+
+#### 39634442
+
+```{r}
+ehh_39634442 <- calc_ehh(hap,mrk="CAE17-39634442")
+plot(ehh_39634442,
+     main="EHH at CAE17:39634442",
+     col=c("blue2","gold2"))
+```
+
+Bifurcatin'
+
+```{r}
+furcation_39634442 <-calc_furcation(hap,mrk="CAE17-39634442")
+plot(furcation_39634442,
+     lwd=0.1,
+     col=c("blue2","gold2"),
+     cex.lab=0.3,
+     main="Bifurcation CAE17:39634442",
+     legend.xy.coords="none",
+     xlim=c(39630000,39640000))
+```
+
+## Ka/Ks
+
+#### Green monkeys to macaques
+
+```{r}
+library(seqinr)
+# note seqinr wants data in its own formatting, also og file must be reformatted to FASTA
+aligned_data <- read.alignment("kakstestHLADRA_align_trim.fasta", format = "fasta")
+# all in quotes
+kaks_test <- kaks(aligned_data) # needs to be divisible by 3, I removed an allele in an intron
+# unsure if this is legit bc of that
+# there's a difference in allele counts bc I removed alleles in 
+kaks_test$ka
+kaks_test$ks
+kaks <- kaks_test$ka/kaks_test$ks; kaks 
+```
+
+So, if I have the correct understanding, there are 1.16 more non-synonymous mutations than synonymous in vervets compared to macaques.
